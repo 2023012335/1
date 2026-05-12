@@ -1,0 +1,199 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>设备预约系统</title>
+<script src="https://www.gstatic.com/firebasejs/9.22.1/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/9.22.1/firebase-firestore-compat.js"></script>
+<style>
+body{font-family:Arial,"Microsoft YaHei",sans-serif;margin:0;background:#f3f4f6;color:#1f2937;}
+.topbar{background:#1976d2;color:#fff;padding:14px 20px;font-size:26px;font-weight:bold;}
+.page{padding:16px 20px 30px 20px;}
+.toolbar{display:flex;flex-wrap:wrap;gap:10px;align-items:center;margin-bottom:14px;background:#fff;padding:12px;border-radius:8px;box-shadow:0 1px 3px rgba(0,0,0,0.08);}
+.toolbar label{font-size:14px;}
+.toolbar input,.toolbar select,.toolbar button{height:34px;font-size:14px;padding:4px 10px;border:1px solid #cfd8dc;border-radius:4px;}
+.toolbar button{background:#1976d2;color:#fff;border:none;cursor:pointer;}
+.toolbar button:hover{background:#1565c0;}
+.hint{margin:8px 0 14px 0;font-size:14px;color:#374151;}
+.calendar-wrapper{background:#fff;border-radius:8px;overflow:auto;border:1px solid #d7dde3;}
+.calendar-header{display:flex;min-width:900px;border-bottom:1px solid #d7dde3;background:#fff;position:sticky;top:0;z-index:20;}
+.time-header{width:70px;min-width:70px;padding:10px;text-align:center;font-weight:bold;color:#4b5563;border-right:1px solid #d7dde3;}
+.device-header-container{flex:1;display:flex;}
+.device-header{flex:1;min-width:220px;padding:10px;text-align:center;font-weight:bold;color:#374151;border-right:1px solid #d7dde3;background:#fff;}
+.calendar-body{display:flex;min-width:900px;}
+.time-column{width:70px;min-width:70px;border-right:1px solid #d7dde3;}
+.time-slot{height:60px;border-bottom:1px solid #e5e7eb;text-align:center;line-height:60px;font-size:13px;color:#4b5563;background:#f3f4f6;}
+.device-columns{flex:1;display:flex;}
+.device-column{flex:1;min-width:220px;height:1440px;position:relative;border-right:1px solid #d7dde3;box-sizing:border-box;background:repeating-linear-gradient(to bottom,#f7f7f7 0px,#f7f7f7 60px,#ececec 60px,#ececec 120px);}
+.reservation-block{position:absolute;left:4px;right:4px;background:#9ccc65;border:1px solid #8bc34a;color:#1b4332;border-radius:4px;padding:4px 6px;box-sizing:border-box;overflow:hidden;cursor:pointer;z-index:5;font-size:12px;line-height:1.35;font-weight:600;display:flex;justify-content:space-between;align-items:center;}
+.reservation-name{font-weight:bold;margin-right:4px;}
+.reservation-time{font-size:11px;color:#1f2937;white-space:nowrap;}
+</style>
+</head>
+<body>
+<div class="topbar">Firebase 设备预约系统</div>
+<div class="page">
+<div class="toolbar">
+<label>日期：</label><input type="date" id="date">
+<button onclick="prevDay()">前一天</button>
+<button onclick="nextDay()">后一天</button>
+<label>用户名：</label><input type="text" id="username" placeholder="输入名字">
+<label>设备：</label><select id="device"></select>
+<div style="display:flex;gap:6px;align-items:center;">
+<label>开始：</label><input type="datetime-local" id="start">
+<label>结束：</label><input type="datetime-local" id="end">
+</div>
+<button onclick="makeReservation()">预约</button>
+<button onclick="loadStats()">统计</button>
+</div>
+
+<div class="hint">点击绿色预约块可取消预约</div>
+
+<div class="calendar-wrapper">
+<div class="calendar-header">
+<div class="time-header">时间</div>
+<div class="device-header-container" id="device-header-container"></div>
+</div>
+<div class="calendar-body">
+<div class="time-column" id="time-column"></div>
+<div class="device-columns" id="device-columns"></div>
+</div>
+</div>
+
+<div id="stats" style="margin-top:20px;"></div>
+</div>
+
+<script>
+// ====== Firebase 配置 ======
+// 替换下面内容为你自己的 Firebase 项目配置
+const firebaseConfig = {
+  apiKey: "AIzaSyCH5LF8OL8eUS3CqjiUj-UnPOnfnmJi0f4",
+  authDomain: "devicereservation-1608d.firebaseapp.com",
+  projectId: "devicereservation-1608d",
+  storageBucket: "devicereservation-1608d.firebasestorage.app",
+  messagingSenderId: "940322881951",
+  appId: "1:940322881951:web:012a83f4706ca62d57bdaa"
+};
+firebase.initializeApp(firebaseConfig);
+const db = firebase.firestore();
+
+// ====== 全局变量 ======
+const dateInput = document.getElementById('date');
+let currentDate = new Date();
+dateInput.value = currentDate.toISOString().slice(0,10);
+
+// ====== 时间列 ======
+function buildTimeColumn(){
+    const timeColumn = document.getElementById('time-column'); timeColumn.innerHTML='';
+    for(let h=0;h<24;h++){
+        const div=document.createElement('div');
+        div.className="time-slot";
+        div.innerText=String(h).padStart(2,'0')+":00";
+        timeColumn.appendChild(div);
+    }
+}
+
+// ====== 加载设备 ======
+async function loadDevices(){
+    const devicesSnapshot = await db.collection("devices").get();
+    const devices = devicesSnapshot.docs.map(doc=>({id:doc.id,name:doc.data().name}));
+    const headerContainer = document.getElementById('device-header-container');
+    const columnContainer = document.getElementById('device-columns');
+    const deviceSelect = document.getElementById('device');
+    headerContainer.innerHTML=''; columnContainer.innerHTML=''; deviceSelect.innerHTML='';
+    devices.forEach(d=>{
+        const header=document.createElement('div'); header.className="device-header"; header.innerText=d.name; headerContainer.appendChild(header);
+        const col=document.createElement('div'); col.className="device-column"; col.dataset.device=d.id; columnContainer.appendChild(col);
+        const opt=document.createElement('option'); opt.value=d.id; opt.text=d.name; deviceSelect.appendChild(opt);
+    });
+}
+
+// ====== 渲染日历 ======
+async function loadCalendar(){
+    const dayStart = new Date(dateInput.value); dayStart.setHours(0,0,0,0);
+    const dayEnd = new Date(dayStart); dayEnd.setDate(dayEnd.getDate()+1);
+    document.querySelectorAll('.device-column').forEach(c=>c.innerHTML='');
+    const resSnapshot = await db.collection("reservations")
+      .where("end_time",">", dayStart.toISOString())
+      .where("start_time","<", dayEnd.toISOString())
+      .get();
+    resSnapshot.docs.forEach(doc=>{
+        const data = doc.data();
+        const col = document.querySelector(`.device-column[data-device="${data.device_id}"]`);
+        if(!col) return;
+        let start = new Date(data.start_time); let end = new Date(data.end_time);
+        if(start<dayStart) start=dayStart; if(end>dayEnd) end=dayEnd;
+        const top = (start-dayStart)/60000; const height = (end-start)/60000;
+        const block=document.createElement('div'); block.className="reservation-block";
+        block.style.top=top+'px'; block.style.height=height+'px';
+        block.innerHTML=`<span class="reservation-name">${data.username}</span><span class="reservation-time">${start.getHours()}:${start.getMinutes()}-${end.getHours()}:${end.getMinutes()}</span>`;
+        block.onclick = async ()=>{
+            if(confirm(`取消 ${data.username} 的预约？`)){
+                await db.collection("reservations").doc(doc.id).delete();
+                loadCalendar();
+            }
+        };
+        col.appendChild(block);
+    });
+}
+
+// ====== 新增预约 ======
+async function makeReservation(){
+    const username = document.getElementById('username').value.trim();
+    const device_id = document.getElementById('device').value;
+    const start = document.getElementById('start').value;
+    const end = document.getElementById('end').value;
+    if(!username || !device_id || !start || !end){alert("请填写完整"); return;}
+    const users = await db.collection("users").where("name","==",username).get();
+    let user;
+    if(users.empty){
+        const res = await db.collection("users").add({name:username});
+        user = {id:res.id,name:username};
+    }else{user = {id: users.docs[0].id, name: username};}
+    const conflict = await db.collection("reservations")
+      .where("device_id","==",device_id)
+      .where("end_time",">",start)
+      .where("start_time","<",end)
+      .get();
+    if(!conflict.empty){alert("时间冲突"); return;}
+    await db.collection("reservations").add({user_id:user.id,username,device_id,start_time:start,end_time:end});
+    loadCalendar();
+}
+
+// ====== 翻页 ======
+function prevDay(){currentDate.setDate(currentDate.getDate()-1); dateInput.value=currentDate.toISOString().slice(0,10); loadCalendar();}
+function nextDay(){currentDate.setDate(currentDate.getDate()+1); dateInput.value=currentDate.toISOString().slice(0,10); loadCalendar();}
+
+// ====== 统计 ======
+async function loadStats(){
+    const start_date = prompt("开始日期 (YYYY-MM-DD)");
+    const end_date = prompt("结束日期 (YYYY-MM-DD)");
+    if(!start_date || !end_date) return;
+    const startDT = new Date(start_date); const endDT = new Date(end_date); endDT.setDate(endDT.getDate()+1);
+    const resSnapshot = await db.collection("reservations")
+      .where("start_time",">=", startDT.toISOString())
+      .where("start_time","<=", endDT.toISOString())
+      .get();
+    const statsDiv = document.getElementById("stats");
+    const summary = {};
+    resSnapshot.docs.forEach(doc=>{
+        const d = doc.data(); const key=d.device_id;
+        const dur = (new Date(d.end_time)-new Date(d.start_time))/3600000;
+        if(!summary[key]) summary[key]={total:0,count:0,users:{}};
+        summary[key].total+=dur; summary[key].count+=1;
+        if(!summary[key].users[d.username]) summary[key].users[d.username]=0;
+        summary[key].users[d.username]+=dur;
+    });
+    let html="<h2>统计结果（小时）</h2>";
+    for(let dev in summary){
+        html+=`<b>设备ID:${dev}</b> 总时长:${summary[dev].total.toFixed(2)}h 预约次数:${summary[dev].count}<br>`;
+        for(let u in summary[dev].users){html+=`&nbsp;&nbsp;${u}: ${summary[dev].users[u].toFixed(2)}h<br>`;}
+    }
+    statsDiv.innerHTML=html;
+}
+
+// ====== 初始化 ======
+buildTimeColumn(); loadDevices().then(()=>loadCalendar());
+</script>
+</body>
+</html>
